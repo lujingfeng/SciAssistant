@@ -1,0 +1,745 @@
+# Copyright (c) 2026 South China Sea Institute of Oceanology, Chinese Academy of Sciences (SCSIO, CAS). All rights reserved.
+"""
+PlannerAgent HTTP Server
+基于FastAPI实现的PlannerAgent服务器，提供RESTful API接口
+支持单查询处理、批量查询处理等功能
+本文件配置项：
+	app="a:app",
+	host="0.0.0.0",
+	port=8000,		# a.py对外提供服务端口号
+	reload=False,
+	workers=1
+"""
+import asyncio
+import os
+import sys
+import time
+import json
+import uuid
+import signal
+import multiprocessing as mp
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from concurrent.futures import ProcessPoolExecutor, as_completed, ThreadPoolExecutor
+
+# 【重要】先调整Python路径，再导入项目模块
+sys.path.insert(0, str(Path(__file__).parent.parent))  # 添加 new_deepdiver 到路径
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))  # 添加项目根目录到路径
+
+# 导入日志配置
+from config.logging_config import get_logger, quick_setup
+
+# 导入核心模块
+from src.agents.planner_agent import PlannerAgent
+from src.agents.base_agent import AgentConfig
+from src.tools.mcp_tools import MCPTools
+from src.utils.task_manager import task_manager, TaskStatus
+
+# 配置日志 - 捕获所有日志到文件
+import logging
+
+# 使用绝对路径，确保日志写入项目根目录的logs文件夹
+log_dir = Path(__file__).parent.parent.parent / 'logs'
+quick_setup(environment='production', log_dir=str(log_dir))
+logger = get_logger(__name__)
+
+# 确保第三方库的日志也写入文件
+logging.getLogger('config.config').setLevel(logging.INFO)
+logging.getLogger('faiss.loader').setLevel(logging.INFO)
+logging.getLogger('litellm').setLevel(logging.WARNING)
+
+# 导入FastAPI相关模块
+from typing import List, Dict, Optional, Any, cast
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from pydantic import BaseModel
+import uvicorn
+
+# 导入原有核心模块
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.agents.planner_agent import PlannerAgent, create_planner_agent
+from src.agents.base_agent import AgentConfig
+from config.config import get_config
+from fastapi.middleware.cors import CORSMiddleware
+from typing import cast, Any
+# a.py 新增会话管理工具类
+import uuid
+from pathlib import Path
+from typing import Dict, Optional
+# a.py 应用初始化改造
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
+# a.py 定时清理任务
+from fastapi import BackgroundTasks
+import time
+
+# 全局变量
+query_history: List[Dict[str, Any]] = []  # 仅记录查询历史，无会话关联
+batch_results: Dict[str, Any] = {}
+executor = None  # 线程池将在lifespan中初始化
+
+
+# 数据模型（请求/响应格式）
+class UserFile(BaseModel):
+    """用户上传的文件信息（简化版：只包含必需字段）"""
+    file_id: str  # 文件ID，用于从Flask后端下载文件
+    filename: str  # 文件名，用于显示和保存
+
+
+class SingleQueryRequest(BaseModel):
+    query: str  # 查询文本
+    taskId: str  # 任务ID
+    user_files: Optional[List[UserFile]] = []  # 强制使用的文件列表（直接上传）
+    reference_files: Optional[List[UserFile]] = []  # 可选参考的文件列表（从文档库选择）
+    use_web_search: bool = True  # 是否启用网络检索
+    prioritize_user_files: bool = True  # 是否优先使用用户文件
+    username: Optional[str] = "用户"  # 用户名，用于生成报告署名
+
+
+class BatchQueryRequest(BaseModel):
+    queries: List[str]  # 批量查询列表
+    max_workers: Optional[int] = None  # 可选：指定进程数
+
+
+class AgentSubResponse(BaseModel):
+    """子 Agent（如 information_seeker）的响应结构"""
+    success: bool
+    result: Optional[Any] = None
+    error: Optional[str] = None
+    reasoning_trace: Optional[List[Dict[str, Any]]] = []
+    iterations: int
+    execution_time: float
+    agent_name: str
+
+
+# 章节写作Agent的响应（特殊处理，因由Writer调用）
+class SectionWriterSubResponse(BaseModel):
+    section_task: Optional[Dict[str, Any]] = None  # 章节任务参数
+    section_result: Optional[Dict[str, Any]] = None  # 章节写作结果
+    execution_time: float = 0.0
+
+
+# 最终接口响应模型
+class QueryResponse(BaseModel):
+    # 1. 基础请求信息
+    success: bool
+    query: str
+    timestamp: str
+    session_id: str
+    task_id: Optional[str] = None  # 新增：任务ID用于跟踪和取消
+    # PlannerAgent信息
+    planner_result: Optional[Dict[str, Any]] = None
+    planner_error: Optional[str] = None
+    planner_reasoning_trace: List[Dict[str, Any]] = []
+    planner_iterations: int = 0
+    planner_execution_time: float = 0.0
+    planner_agent_name: str = ""
+
+    # 子Agent响应
+    section_writer_responses: List[SectionWriterSubResponse] = []
+    
+    # 最终报告内容
+    final_report: Optional[str] = None  # Markdown格式的最终报告内容
+    report_path: Optional[str] = None  # 报告文件路径（相对于workspace）
+
+
+class BatchResponse(BaseModel):
+    batch_id: str
+    status: str  # "processing" 或 "completed"
+    total_queries: int
+    completed_count: int
+    results: Optional[List[QueryResponse]] = None
+
+
+# 服务器生命周期管理
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """服务器启动和关闭时的处理逻辑"""
+    import random
+
+    # 【多进程兼容性修复】添加随机延迟，避免多个 worker 同时初始化
+    # 延迟 0-2 秒，错开资源初始化时间
+    delay = random.uniform(0, 2)
+    await asyncio.sleep(delay)
+
+    # 启动时初始化环境变量
+    if not os.environ.get('MCP_SERVER_URL'):
+        os.environ['MCP_SERVER_URL'] = 'http://localhost:6274/mcp/'
+        os.environ['MCP_USE_STDIO'] = 'false'
+
+    # 初始化全局线程池
+    global executor
+    executor = ThreadPoolExecutor(max_workers=8)
+
+    logger.info(f"PlannerAgent服务器初始化成功（PID: {os.getpid()}, 延迟: {delay:.2f}s）")
+    yield  # 运行期间
+
+    # 关闭线程池
+    logger.info(f"服务器正在关闭... (PID: {os.getpid()})")
+    if executor:
+        executor.shutdown(wait=True)
+
+
+# 初始化FastAPI应用
+app = FastAPI(
+    title="PlannerAgent Server (Stateless)",
+    description="无状态PlannerAgent服务器，支持并发查询处理",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# 配置跨域
+app.add_middleware(
+    cast(Any, CORSMiddleware),
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"]
+)
+
+
+# 辅助函数：下载用户文件到工作区
+def _download_user_files(user_files_data: List[Dict[str, str]], workspace_path: Path) -> None:
+    """下载用户上传的文件到工作区，按类型分目录存储"""
+    if not user_files_data:
+        return
+
+    # 分离强制文件和可选文件
+    mandatory_files = [f for f in user_files_data if f.get('type') == 'mandatory']
+    optional_files = [f for f in user_files_data if f.get('type') == 'optional']
+
+    logger.info(f"检测到 {len(user_files_data)} 个文件：强制使用 {len(mandatory_files)} 个，可选参考 {len(optional_files)} 个")
+
+    try:
+        mcp_tools = MCPTools(workspace_path=workspace_path)
+
+        # 下载强制使用的文件到 user_uploads/
+        if mandatory_files:
+            file_ids = [f['file_id'] for f in mandatory_files]
+            logger.info(f"下载强制文件到 user_uploads/: {file_ids}")
+
+            download_result = mcp_tools.process_user_uploaded_files(
+                file_ids=file_ids,
+                backend_url="http://localhost:5000",
+                target_subdir="user_uploads"  # 强制文件目录
+            )
+
+            if download_result.success:
+                downloaded_files = download_result.data.get('files', [])
+                logger.info(f"成功下载 {len(downloaded_files)} 个强制文件")
+                for f in downloaded_files:
+                    logger.debug(f"  - {f.get('filename')} -> {f.get('local_path')}")
+            else:
+                logger.error(f"强制文件下载失败: {download_result.error}")
+
+        # 下载可选参考的文件到 library_refs/
+        if optional_files:
+            file_ids = [f['file_id'] for f in optional_files]
+            logger.info(f"下载可选文件到 library_refs/: {file_ids}")
+
+            download_result = mcp_tools.process_user_uploaded_files(
+                file_ids=file_ids,
+                backend_url="http://localhost:5000",
+                target_subdir="library_refs"  # 可选文件目录
+            )
+
+            if download_result.success:
+                downloaded_files = download_result.data.get('files', [])
+                logger.info(f"成功下载 {len(downloaded_files)} 个可选文件")
+                for f in downloaded_files:
+                    logger.debug(f"  - {f.get('filename')} -> {f.get('local_path')}")
+            else:
+                logger.error(f"可选文件下载失败: {download_result.error}")
+
+    except Exception as e:
+        logger.error(f"预下载用户文件时发生异常: {e}", exc_info=True)
+
+
+# 辅助函数：构建增强的查询文本
+def _build_enhanced_query(query_text: str, user_files_data: List[Dict[str, str]]) -> str:
+    """构建包含用户文件信息的增强查询文本"""
+    if not user_files_data:
+        return query_text
+
+    # 分离强制文件和可选文件
+    mandatory_files = [f for f in user_files_data if f.get('type') == 'mandatory']
+    optional_files = [f for f in user_files_data if f.get('type') == 'optional']
+
+    file_info_text = ""
+
+    # 添加强制使用的文件信息
+    if mandatory_files:
+        file_info_text += "\n\n【用户强制要求使用的文件（必须在报告中使用）】：\n"
+        for i, file_info in enumerate(mandatory_files, 1):
+            file_info_text += f"{i}. ./user_uploads/{file_info['filename']} (文件ID: {file_info['file_id']})\n"
+        file_info_text += "\n这些文件必须被分析和引用。"
+
+    # 添加可选参考的文件信息
+    if optional_files:
+        file_info_text += "\n\n【用户提供的可选参考文件（根据相关性自行判断是否使用）】：\n"
+        for i, file_info in enumerate(optional_files, 1):
+            file_info_text += f"{i}. ./library_refs/{file_info['filename']} (文件ID: {file_info['file_id']})\n"
+        file_info_text += "\n这些文件可以作为参考资料，与网络检索结果一起评估相关性后选择使用。"
+
+    file_info_text += "\n\n请使用 document_extract 工具分析文件内容，并进行网络检索来补充最新信息，确保报告内容的全面性和时效性。\n"
+    return file_info_text + query_text
+
+
+def process_single_query(query_data, task_id: Optional[str] = None, username: str = "用户",
+                         skip_task_creation: bool = False):
+    """处理单个查询（独立进程，使用持久化工作区）"""
+    query_text, query_index, user_files_data = query_data
+    process_id = os.getpid()
+    if not task_id:
+        task_id = f"req_{int(time.time() * 1000)}_{query_index}"  # 生成唯一请求ID
+
+    # 创建并注册任务（如果尚未在调用方创建）
+    if not skip_task_creation:
+        task_manager.create_task(task_id, query_text)
+        task_manager.update_task_status(task_id, TaskStatus.RUNNING)
+
+    # 使用持久化工作区（而非临时目录）
+    # 统一使用项目根目录的 workspaces
+    current_file = Path(__file__).resolve()  # cli/a.py
+    project_root = None
+
+    # 向上查找包含 app.py 的目录（项目根目录）
+    for parent in [current_file.parent] + list(current_file.parents):
+        if (parent / "app.py").exists():
+            project_root = parent
+            break
+
+    # 如果找不到 app.py，使用当前工作目录
+    if project_root is None:
+        project_root = Path.cwd()
+
+    # 统一使用项目根目录下的 workspaces
+    base_workspaces = project_root / "workspaces"
+    base_workspaces.mkdir(exist_ok=True, parents=True)
+
+    # 生成 session_id（使用 UUID）
+    session_id = str(uuid.uuid4())
+    workspace_path = base_workspaces / session_id
+    workspace_path.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"[WORKSPACE] session_id: {session_id}")
+    logger.info(f"[WORKSPACE] workspace initialized at: {workspace_path.resolve()}")
+
+    try:
+        app_config = get_config()
+        sub_agent_configs = {
+            "information_seeker": {"model": app_config.model_name},
+            "writer": {"model": app_config.model_name}
+        }
+
+        # 设置环境变量，让 Agent 使用已创建的 workspace
+        os.environ['AGENT_SESSION_ID'] = session_id
+        os.environ['AGENT_WORKSPACE_PATH'] = str(workspace_path)
+
+        agent = create_planner_agent(
+            agent_name=f"PlannerAgent",
+            model=app_config.model_name,
+            max_iterations=app_config.planner_max_iterations or 40,
+            sub_agent_configs=sub_agent_configs,
+            task_id=task_id
+        )
+        # 设置取消令牌
+        cancellation_token = task_manager.get_cancellation_token(task_id)
+        if cancellation_token:
+            agent.set_cancellation_token(cancellation_token)
+
+        # 下载用户文件到工作区
+        _download_user_files(user_files_data, workspace_path)
+
+        # 将username写入workspace的配置文件，避免环境变量冲突
+        username_file = workspace_path / '.username'
+        with open(username_file, 'w', encoding='utf-8') as f:
+            f.write(username)
+
+        # 构建增强的查询文本
+        enhanced_query = _build_enhanced_query(query_text, user_files_data)
+
+        start_time = time.time()
+        response = agent.execute_task(enhanced_query + " /no_think")
+        execution_time = time.time() - start_time
+
+        # 检查是否被取消
+        if hasattr(response, 'error') and response.error and "cancelled" in str(response.error).lower():
+            task_manager.update_task_status(task_id, TaskStatus.CANCELLED, error=response.error)
+            raise HTTPException(status_code=499, detail="Task was cancelled by user")
+
+        # 更新任务状态为完成
+        task_manager.update_task_status(task_id, TaskStatus.COMPLETED, result=True)
+
+        # 读取最终报告内容
+        final_report_content = None
+        report_relative_path = None
+        try:
+            # 尝试读取 final_report.md
+            final_report_path = workspace_path / "report" / "final_report.md"
+            if final_report_path.exists():
+                with open(final_report_path, 'r', encoding='utf-8') as f:
+                    final_report_content = f.read()
+                report_relative_path = "report/final_report.md"
+                logger.info(f"成功读取最终报告: {final_report_path} (大小: {len(final_report_content)} 字符)")
+            else:
+                logger.warning(f"最终报告文件不存在: {final_report_path}")
+        except Exception as e:
+            logger.error(f"读取最终报告失败: {e}")
+
+        # 返回符合 QueryResponse 模型的字典结构
+        return {
+            'success': response.success,
+            'query': query_text,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'session_id': session_id,
+            'task_id': task_id,
+            'planner_result': response.result if response.success else None,
+            'planner_error': response.error if not response.success else None,
+            'planner_reasoning_trace': getattr(response, 'reasoning_trace', []),
+            'planner_iterations': response.iterations,
+            'planner_execution_time': execution_time,
+            'planner_agent_name': 'PlannerAgent',
+            'section_writer_responses': [],
+            'final_report': final_report_content,
+            'report_path': report_relative_path
+        }
+    except Exception as e:
+        task_manager.update_task_status(task_id, TaskStatus.FAILED, error=str(e))
+        # 返回符合 QueryResponse 模型的字典结构
+        return {
+            'success': False,
+            'query': query_text,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'session_id': session_id,
+            'task_id': task_id,
+            'planner_result': None,
+            'planner_error': str(e),
+            'planner_reasoning_trace': [],
+            'planner_iterations': 0,
+            'planner_execution_time': 0,
+            'planner_agent_name': 'PlannerAgent',
+            'section_writer_responses': [],
+            'final_report': None,
+            'report_path': None
+        }
+
+
+# 批量处理任务（用于后台执行）
+def process_batch_task(
+        queries: List[str],
+        max_workers: Optional[int],
+        batch_id: str,
+        results_store: Dict[str, BatchResponse]
+):
+    """批量处理查询并存储结果"""
+    query_data = [(q, idx) for idx, q in enumerate(queries)]
+    max_workers = max_workers or min(mp.cpu_count(), len(queries), 4)
+    results = []
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        future_to_query = {executor.submit(process_single_query, qd): qd for qd in query_data}
+        for future in as_completed(future_to_query):
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                qd = future_to_query[future]
+                results.append({
+                    'success': False,
+                    'query': qd[0],
+                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'session_id': '',
+                    'task_id': None,
+                    'planner_result': None,
+                    'planner_error': str(e),
+                    'planner_reasoning_trace': [],
+                    'planner_iterations': 0,
+                    'planner_execution_time': 0,
+                    'planner_agent_name': 'PlannerAgent',
+                    'section_writer_responses': [],
+                    'final_report': None,
+                    'report_path': None
+                })
+
+    # 排序并更新结果存储
+    results.sort(key=lambda x: x['query_index'])
+    results_store[batch_id] = BatchResponse(
+        batch_id=batch_id,
+        status="completed",
+        total_queries=len(queries),
+        completed_count=len(results),
+        results=[QueryResponse(**r) for r in results]
+    )
+
+
+# API端点实现
+@app.post("/api/query", response_model=QueryResponse, summary="处理单个查询")
+async def handle_single_query(request: SingleQueryRequest):
+    """异步处理单个查询，支持高并发和用户文件上传"""
+
+    # 【并发控制】检查当前运行中的query数量
+    running_count = task_manager.get_running_tasks_count()
+
+    if running_count >= 4:
+        # 已有4个query运行，第5个请求拒绝服务
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "SERVICE_BUSY",
+                "message": "抱歉，服务暂时拥挤，建议10分钟后再尝试",
+                "running_queries": running_count
+            }
+        )
+
+    # 生成唯一任务ID
+    task_id = request.taskId
+    loop = asyncio.get_event_loop()
+
+    # 【关键修复】在提交到线程池之前就创建任务，确保并发计数及时生效
+    task_manager.create_task(task_id, request.query)
+    task_manager.update_task_status(task_id, TaskStatus.RUNNING)
+
+    # 准备强制使用的文件数据（直接上传）
+    user_files_data = []
+    if request.user_files and len(request.user_files) > 0:
+        for file in request.user_files:
+            user_files_data.append({
+                'file_id': file.file_id,
+                'filename': file.filename,
+                'type': 'mandatory'  # 标记为强制使用
+            })
+
+    # 准备可选参考的文件数据（从文档库选择）
+    reference_files_data = []
+    if request.reference_files and len(request.reference_files) > 0:
+        for file in request.reference_files:
+            reference_files_data.append({
+                'file_id': file.file_id,
+                'filename': file.filename,
+                'type': 'optional'  # 标记为可选参考
+            })
+
+    # 合并所有文件数据，传递给处理函数
+    all_files_data = user_files_data + reference_files_data
+
+    # 使用线程池执行，避免阻塞事件循环
+    if executor is None:
+        raise HTTPException(status_code=500, detail="Server executor not initialized")
+
+    result = await loop.run_in_executor(
+        executor,
+        lambda: process_single_query((request.query, 0, all_files_data), task_id=task_id, username=request.username,
+                                     skip_task_creation=True)  # 传递用户文件数据和用户名，跳过任务创建（已在上面创建）
+    )
+    # 记录历史（可选）
+    query_history.append({
+        "task_id": task_id,
+        "request_id": result['session_id'],  # 使用字典访问方式
+        "query": request.query,
+        "timestamp": result['timestamp'],  # 使用字典访问方式
+        "success": result['success'],  # 使用字典访问方式
+        "user_files_count": len(user_files_data),
+        "reference_files_count": len(reference_files_data)
+    })
+    return result
+
+
+@app.post("/api/batch", response_model=BatchResponse, summary="处理批量查询")
+def handle_batch_query(request: BatchQueryRequest, background_tasks: BackgroundTasks):
+    """处理批量查询，后台异步执行"""
+    if not request.queries:
+        raise HTTPException(status_code=400, detail="批量查询列表不能为空")
+
+    # 生成唯一批次ID
+    batch_id = f"batch_{int(time.time())}"
+    # 初始化批次状态
+    batch_results[batch_id] = BatchResponse(
+        batch_id=batch_id,
+        status="processing",
+        total_queries=len(request.queries),
+        completed_count=0
+    )
+
+    # 将批量处理任务添加到后台
+    background_tasks.add_task(
+        process_batch_task,
+        queries=request.queries,
+        max_workers=request.max_workers,
+        batch_id=batch_id,
+        results_store=batch_results
+    )
+
+    return batch_results[batch_id]
+
+
+@app.get("/api/batch/{batch_id}", response_model=BatchResponse, summary="查询批量任务结果")
+def get_batch_result(batch_id: str):
+    """通过批次ID查询结果"""
+    if batch_id not in batch_results:
+        raise HTTPException(status_code=404, detail="批次ID不存在")
+    return batch_results[batch_id]
+
+
+@app.get("/api/concurrency", summary="获取当前并发状态")
+async def get_concurrency_status():
+    """
+    返回当前运行中的query数量，用于前端预检查
+    
+    Returns:
+        running_queries: 当前运行中的query数量
+        max_concurrent: 最大并发数阈值
+        status: 状态标识 (available/queuing/busy)
+    """
+    running_count = task_manager.get_running_tasks_count()
+
+    if running_count >= 4:
+        status = "busy"
+    elif running_count >= 3:
+        status = "queuing"
+    else:
+        status = "available"
+
+    return {
+        "running_queries": running_count,
+        "max_concurrent": 4,
+        "status": status
+    }
+
+
+@app.get("/api/status", summary="获取服务器状态")
+def get_server_status():
+    """返回服务器状态和统计信息"""
+    running_count = task_manager.get_running_tasks_count()
+    return {
+        "status": "运行中",
+        "concurrent_workers": executor._max_workers if executor and hasattr(executor, '_max_workers') else 8,
+        "query_history_count": len(query_history),
+        "active_batch_tasks": sum(1 for res in batch_results.values() if res.status == "processing"),
+        "running_queries": running_count,
+        "concurrency_status": "busy" if running_count >= 4 else ("queuing" if running_count >= 3 else "available")
+    }
+
+
+@app.get("/api/history", summary="获取查询历史")
+def get_query_history(limit: int = 10):
+    """返回最近的查询历史"""
+    return {
+        "total": len(query_history),
+        "history": query_history[-limit:]
+    }
+
+
+@app.post("/api/task/{task_id}/cancel", summary="取消正在运行的任务")
+async def cancel_task(task_id: str):
+    """
+    取消正在运行的任务
+    
+    Args:
+        task_id: 任务ID
+        
+    Returns:
+        取消结果
+    """
+    success = task_manager.cancel_task(task_id)
+
+    if not success:
+        task_info = task_manager.get_task(task_id)
+        if task_info is None:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        else:
+            return {
+                "success": False,
+                "message": "任务已经中断！",
+                "task_id": task_id,
+                "status": task_info.status.value
+            }
+
+    return {
+        "success": True,
+        "message": "任务中断成功！",
+        "task_id": task_id
+    }
+
+
+@app.get("/api/task/{task_id}", summary="获取任务状态")
+async def get_task_status(task_id: str):
+    """
+    获取任务状态和进度信息
+    
+    Args:
+        task_id: 任务ID
+        
+    Returns:
+        任务状态信息
+    """
+    task_info = task_manager.get_task(task_id)
+
+    if task_info is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+    return {
+        "task_id": task_info.task_id,
+        "query": task_info.query,
+        "status": task_info.status.value,
+        "created_at": task_info.created_at,
+        "updated_at": task_info.updated_at,
+        "progress": task_info.progress,
+        "error": task_info.error,
+        "has_result": task_info.result is not None
+    }
+
+
+@app.get("/api/tasks", summary="获取所有任务列表")
+async def get_all_tasks():
+    """
+    获取所有任务的列表
+    
+    Returns:
+        所有任务的信息
+    """
+    tasks = task_manager.get_all_tasks()
+    running_count = task_manager.get_running_tasks_count()
+
+    return {
+        "total_tasks": len(tasks),
+        "running_tasks": running_count,
+        "tasks": list(tasks.values())
+    }
+
+
+@app.delete("/api/tasks/cleanup", summary="清理已完成的旧任务")
+async def cleanup_old_tasks(max_age_seconds: int = 3600):
+    """
+    清理已完成、已取消或失败的旧任务
+    
+    Args:
+        max_age_seconds: 任务最大保留时间（秒），默认1小时
+        
+    Returns:
+        清理结果
+    """
+    task_manager.cleanup_completed_tasks(max_age_seconds)
+
+    return {
+        "success": True,
+        "message": f"Cleaned up tasks older than {max_age_seconds} seconds"
+    }
+
+
+if __name__ == "__main__":
+    # 【修复 SIGHUP 导致的进程重启问题】
+    # 忽略 SIGHUP 信号，防止 SSH 断开或终端关闭时触发 uvicorn 重启
+    # SIGHUP 仅在 Unix 系统上可用
+    if hasattr(signal, 'SIGHUP'):
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+
+    # 启动UVicorn服务器（使用当前文件名作为模块）
+    uvicorn.run(
+        app="a:app",  # 因为文件名为a.py，所以模块名为a
+        host="0.0.0.0",
+        port=8000,
+        reload=False,
+        workers=1  # 建议启动1个worker进程，避免多进程下出现数据不一致问题，已使用线程池技术实现多并发
+    )
