@@ -433,6 +433,13 @@ class BaseAgent(ABC):
         
         return schemas
     
+    def get_tool_schemas_for_prompt(self) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+        """
+        Return tool schemas for prompt construction and for OpenAI/DeepSeek tools parameter.
+        Same source as _build_agent_specific_tool_schemas: dict (MCP) or list (OpenAI-style).
+        """
+        return self._build_agent_specific_tool_schemas()
+
     def _build_fallback_schemas(self) -> List[Dict[str, Any]]:
         """Fallback schema building if MCP client method fails"""
         schemas = []

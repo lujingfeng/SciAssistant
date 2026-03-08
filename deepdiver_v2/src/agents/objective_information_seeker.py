@@ -10,6 +10,7 @@ import time
 import requests
 import os
 from .base_agent import BaseAgent, AgentConfig, AgentResponse, TaskInput
+from .. import llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -185,10 +186,13 @@ For each function call, return a JSON object placed within the [unused11][unused
             from config.config import get_config
             config = get_config()
             model_config = config.get_custom_llm_config()
-            
+
             pangu_url = model_config.get('url') or os.getenv('MODEL_REQUEST_URL', '')
-            model_token = model_config.get('token') or os.getenv('MODEL_REQUEST_TOKEN', '')
-            headers = {'Content-Type': 'application/json', 'csb-token': model_token}
+            headers = llm_client.get_headers(model_config)
+            openai_tools = None
+            if llm_client.is_deepseek_api(model_config):
+                schemas = self.get_tool_schemas_for_prompt()
+                openai_tools = llm_client.mcp_schemas_to_openai_tools(schemas, list(self.available_tools.keys()))
 
             # ReAct Loop: Reasoning -> Acting -> Reasoning -> Acting...
             while iteration < self.config.max_iterations and not task_completed:
@@ -196,22 +200,21 @@ For each function call, return a JSON object placed within the [unused11][unused
                 self.logger.info(f"Planning iteration {iteration}")
                 
                 try:
-                    # Get LLM response (reasoning + potential tool calls)
                     retry_num = 1
                     max_retry_num = 10
                     while retry_num < max_retry_num:
                         try:
+                            body = llm_client.build_chat_request(
+                                model_config,
+                                conversation_history,
+                                temperature=self.config.temperature,
+                                max_tokens=self.config.max_tokens,
+                                tools=openai_tools,
+                            )
                             response = requests.post(
                                 url=pangu_url,
                                 headers=headers,
-                                json={
-                                    "model": self.config.model,
-                                    "chat_template": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<s>[unused9]系统：[unused10]' }}{% endif %}{% if message['role'] == 'system' %}{{'<s>[unused9]系统：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'assistant' %}{{'[unused9]助手：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'tool' %}{{'[unused9]工具：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'function' %}{{'[unused9]方法：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'user' %}{{'[unused9]用户：' + message['content'] + '[unused10]'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '[unused9]助手：' }}{% endif %}",
-                                    "messages": conversation_history,
-                                    "temperature": self.config.temperature,
-                                    "spaces_between_special_tokens": False,
-                                    "max_tokens": self.config.max_tokens,
-                                },
+                                json=body,
                                 timeout=model_config.get("timeout", 180)
                             )
                             response = response.json()
@@ -224,68 +227,45 @@ For each function call, return a JSON object placed within the [unused11][unused
                                 raise ValueError(str(e))
                             continue
 
-                    assistant_message = response["choices"][0]["message"]
-                    
-                    # Log the reasoning
-                    try:
-                        if assistant_message["content"]:
-                            reasoning_content = assistant_message["content"].split("[unused16]")[-1].split("[unused17]")[0]
-                            if len(reasoning_content) > 0:
-                                self.log_reasoning(iteration, reasoning_content)
-                    except Exception as e:
-                        self.logger.warning(f"Tool call parsing error: {e}")
-                        # Parse error, rerun
-                        followup_prompt = f"There is a problem with the format of model generation: {e}. Please try again."
+                    assistant_message, tool_calls = llm_client.parse_chat_response(response, model_config)
+
+                    reasoning_content = llm_client.extract_reasoning_from_content(assistant_message.get("content"))
+                    if reasoning_content:
+                        self.log_reasoning(iteration, reasoning_content)
+                    if not assistant_message.get("content") and not tool_calls:
+                        followup_prompt = "There is a problem with the format of model generation. Please try again."
                         conversation_history.append({"role": "user", "content": followup_prompt + " /no_think"})
                         continue
 
-                    def extract_tool_calls(content):
-                        import re
-                        if not content:
-                            return []
-                        tool_call_str = re.findall(r"\[unused11\]([\s\S]*?)\[unused12\]", content)
-                        if len(tool_call_str) > 0:
-                            try:
-                                tool_calls = json.loads(tool_call_str[0].strip())
-                            except:
-                                return []
-                        else:
-                            return []
-                        return tool_calls
-                    
-                    # Add assistant message to conversation
-                    conversation_history.append({
-                        "role": "assistant",
-                        "content": assistant_message["content"]
-                    })
-                    
-                    tool_calls = extract_tool_calls(assistant_message["content"])
-                    
-                    # Execute tool calls if any (Acting phase)
+                    conversation_history.append(assistant_message)
 
+                    tool_results = []
                     for tool_call in tool_calls:
-                        arguments = tool_call["arguments"]
+                        arguments = tool_call.get("arguments") or {}
+                        if isinstance(arguments, str):
+                            try:
+                                arguments = json.loads(arguments) if arguments.strip() else {}
+                            except json.JSONDecodeError:
+                                arguments = {}
 
-                        # Check if planning is complete
-                        if tool_call["name"] in ["info_seeker_objective_task_done"]:
+                        if tool_call.get("name") in ["info_seeker_objective_task_done"]:
                             task_completed = True
                             self.log_action(iteration, tool_call["name"], arguments, arguments)
+                            tool_results.append(arguments)
                             break
-                        if tool_call["name"] in ["think", "reflect"]:
+                        if tool_call.get("name") in ["think", "reflect"]:
                             tool_result = {"tool_results": "You can proceed to invoke other tools if needed."}
                         else:
-                            tool_result = self.execute_tool_call(tool_call)
-                        
-                        # Log the action using base class method
+                            tool_result = self.execute_tool_call({"name": tool_call["name"], "arguments": arguments})
+
+                        tool_results.append(tool_result)
                         self.log_action(iteration, tool_call["name"], arguments, tool_result)
-                        
-                        # Add tool result to conversation
-                        conversation_history.append({
-                            "role": "tool",
-                            "content": json.dumps(tool_result, ensure_ascii=False, indent=2) + " /no_think"
-                        })
+
+                    n_executed = len(tool_results)
+                    conversation_history.extend(
+                        llm_client.build_tool_result_messages(tool_calls[:n_executed], tool_results, model_config, suffix=" /no_think")
+                    )
                     
-                    # If no tool calls, encourage continued planning
                     if len(tool_calls) == 0:
                         # Add follow-up prompt to encourage action or completion
                         followup_prompt = (

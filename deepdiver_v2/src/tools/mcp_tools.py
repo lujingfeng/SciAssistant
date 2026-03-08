@@ -75,6 +75,11 @@ except ImportError:
     sys.path.append(str(Path(__file__).parent.parent.parent))
     from config.config import get_config
 
+try:
+    from .. import llm_client
+except ImportError:
+    llm_client = None
+
 # Import the optimized Faiss-based manager (fallback to JSON if Faiss not available)
 try:
     from knowledge.vector_store import auto_index_task_completion_optimized, get_optimized_knowledge_manager
@@ -2019,21 +2024,22 @@ class MCPTools:
                 {format_instruction}
                 """
 
-            # 调用 PANGU 模型生成
-            headers = {'Content-Type': 'application/json'}
-
-            logger.info("正在调用 PANGU 模型生成标题、摘要和关键词...")
+            # 调用模型生成（DeepSeek/OpenAI 或 Pangu）
+            model_config = get_config().get_custom_llm_config()
+            headers = llm_client.get_headers(model_config) if llm_client else {'Content-Type': 'application/json'}
+            messages = [
+                {"role": "system", "content": "你是一位专业的学术编辑，擅长为文章生成精准的标题、摘要和关键词。请严格按照用户要求的格式输出。"},
+                {"role": "user", "content": prompt}
+            ]
+            if llm_client:
+                body = llm_client.build_chat_request(model_config, messages, temperature=0.3, max_tokens=2048)
+            else:
+                body = {"model": model_name, "messages": messages, "temperature": 0.3}
+            logger.info("正在调用模型生成标题、摘要和关键词...")
             response = requests.post(
                 url=PANGU_URL,
                 headers=headers,
-                json={
-                    "model": model_name,
-                    "messages": [
-                        {"role": "system", "content": "你是一位专业的学术编辑，擅长为文章生成精准的标题、摘要和关键词。请严格按照用户要求的格式输出。"},
-                        {"role": "user", "content": prompt}
-                    ],
-                    "temperature": 0.3
-                },
+                json=body,
                 verify=False,
                 timeout=300
             )
@@ -2347,22 +2353,22 @@ class MCPTools:
 {source_info if source_info else "未提供"}
 """
 
-            # 调用 PANGU 模型生成
-            headers = {'Content-Type': 'application/json'}
-
-            logger.info("正在调用 PANGU 模型提取作者和标题信息...")
+            # 调用模型提取（DeepSeek/OpenAI 或 Pangu）
+            model_config = get_config().get_custom_llm_config()
+            headers = llm_client.get_headers(model_config) if llm_client else {'Content-Type': 'application/json'}
+            messages = [
+                {"role": "system", "content": "你是一位专业的文献管理专家，擅长从文章内容中提取作者和标题信息，并整理为规范的参考文献格式。请严格按照用户要求的格式输出。"},
+                {"role": "user", "content": prompt}
+            ]
+            if llm_client:
+                body = llm_client.build_chat_request(model_config, messages, temperature=0.3, max_tokens=1024)
+            else:
+                body = {"model": model_name, "messages": messages, "temperature": 0.3}
+            logger.info("正在调用模型提取作者和标题信息...")
             response = requests.post(
                 url=PANGU_URL,
                 headers=headers,
-                json={
-                    "model": model_name,
-                    "messages": [
-                        {"role": "system",
-                         "content": "你是一位专业的文献管理专家，擅长从文章内容中提取作者和标题信息，并整理为规范的参考文献格式。请严格按照用户要求的格式输出。"},
-                        {"role": "user", "content": prompt}
-                    ],
-                    "temperature": 0.3
-                },
+                json=body,
                 verify=False,
                 timeout=300
             )
@@ -3780,34 +3786,35 @@ OUTLINE TO ORGANIZE CONTENT:
 """
 
             model_config = get_config().get_custom_llm_config()
-            # PANGU 模型配置
             PANGU_URL = model_config.get('url') or os.getenv('MODEL_REQUEST_URL', '')
             model_name = model_config.get('model') or os.getenv("MODEL_NAME", "")
-        
-            headers = {'Content-Type': 'application/json'}
+            headers = llm_client.get_headers(model_config) if llm_client else {'Content-Type': 'application/json'}
+            messages_in = [
+                {"role": "system", "content": "system 1"},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
 
             import requests
             import litellm
             try:
-                # Add retry logic for AI model call
                 max_retries = 5
                 response = None
-
                 for attempt in range(max_retries):
                     try:
+                        if llm_client:
+                            body = llm_client.build_chat_request(model_config, messages_in, max_tokens=max_tokens)
+                        else:
+                            body = {
+                                "model": model_name,
+                                "chat_template": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '[unused9]系统：[unused10]' }}{% endif %}{% if message['role'] == 'system' %}{{ message['content'] }}{% endif %}{% if message['role'] == 'assistant' %}{{'[unused9]助手：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'tool' %}{{'[unused9]工具：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'function' %}{{'[unused9]方法：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'user' %}{{'[unused9]用户：' + message['content'] + '[unused10]'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '[unused9]助手：' }}{% endif %}",
+                                "messages": messages_in,
+                                "max_tokens": max_tokens,
+                            }
                         response = requests.post(
                             url=PANGU_URL,
                             headers=headers,
-                            json={
-                                "model": model_name,
-                                "chat_template": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '[unused9]系统：[unused10]' }}{% endif %}{% if message['role'] == 'system' %}{{ message['content'] }}{% endif %}{% if message['role'] == 'assistant' %}{{'[unused9]助手：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'tool' %}{{'[unused9]工具：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'function' %}{{'[unused9]方法：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'user' %}{{'[unused9]用户：' + message['content'] + '[unused10]'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '[unused9]助手：' }}{% endif %}",
-                                "messages": [
-                                    {"role": "system", "content": "system 1"},
-                                    {"role": "system", "content": system_prompt},
-                                    {"role": "user", "content": user_prompt}
-                                ],
-                                "max_tokens": max_tokens,
-                            },
+                            json=body,
                             verify=False
                         )
                         response = response.json()
@@ -4092,13 +4099,23 @@ Strictly follow the following format for output:
     USER QUERY: {user_query}"""
 
             # 调用AI模型进行分类
-            # Get model URL and token from config
+            # Get model URL and token from config（DeepSeek/OpenAI 或 Pangu）
             config = get_config()
             model_config = config.get_custom_llm_config()
-
             model_url = model_config.get('url') or os.getenv('MODEL_REQUEST_URL', '')
-            model_token = model_config.get('token') or os.getenv('MODEL_REQUEST_TOKEN', '')
-            headers = {'Content-Type': 'application/json', 'csb-token': model_token}
+            headers = llm_client.get_headers(model_config) if llm_client else {'Content-Type': 'application/json', 'csb-token': model_config.get('token') or os.getenv('MODEL_REQUEST_TOKEN', '')}
+            messages_in = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt + " /no_think"}
+            ]
+            body = llm_client.build_chat_request(model_config, messages_in, temperature=temperature, max_tokens=max_tokens) if llm_client else {
+                "model": model_config.get('model', 'pangu_auto'),
+                "chat_template": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<s>[unused9]系统：[unused10]' }}{% endif %}{% if message['role'] == 'system' %}{{'<s>[unused9]系统：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'assistant' %}{{'[unused9]助手：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'tool' %}{{'[unused9]工具：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'function' %}{{'[unused9]方法：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'user' %}{{'[unused9]用户：' + message['content'] + '[unused10]'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '[unused9]助手：' }}{% endif %}",
+                "messages": messages_in,
+                "spaces_between_special_tokens": False,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
             try:
                 max_retries = 5
                 response = None
@@ -4107,17 +4124,7 @@ Strictly follow the following format for output:
                         response = requests.post(
                             url=model_url,
                             headers=headers,
-                            json={
-                                "model": model_config.get('model', 'pangu_auto'),
-                                "chat_template": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<s>[unused9]系统：[unused10]' }}{% endif %}{% if message['role'] == 'system' %}{{'<s>[unused9]系统：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'assistant' %}{{'[unused9]助手：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'tool' %}{{'[unused9]工具：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'function' %}{{'[unused9]方法：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'user' %}{{'[unused9]用户：' + message['content'] + '[unused10]'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '[unused9]助手：' }}{% endif %}",
-                                "messages": [
-                                    {"role": "system", "content": system_prompt},
-                                    {"role": "user", "content": user_prompt + " /no_think"}
-                                ],
-                                "spaces_between_special_tokens": False,
-                                "max_tokens": max_tokens,
-                                "temperature": temperature,
-                            },
+                            json=body,
                             timeout=model_config.get("timeout", 180)
                         )
                         response = response.json()
@@ -4152,24 +4159,26 @@ Strictly follow the following format for output:
 
                 summary_response = None
                 max_retries = 5
+                summary_messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt + " /no_think"},
+                    {"role": "assistant", "content": ai_response},
+                    {"role": "user", "content": summary_prompt + " /no_think"}
+                ]
+                summary_body = llm_client.build_chat_request(model_config, summary_messages, temperature=temperature, max_tokens=max_tokens) if llm_client else {
+                    "model": model_config.get('model', 'pangu_auto'),
+                    "chat_template": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<s>[unused9]系统：[unused10]' }}{% endif %}{% if message['role'] == 'system' %}{{'<s>[unused9]系统：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'assistant' %}{{'[unused9]助手：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'tool' %}{{'[unused9]工具：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'function' %}{{'[unused9]方法：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'user' %}{{'[unused9]用户：' + message['content'] + '[unused10]'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '[unused9]助手：' }}{% endif %}",
+                    "messages": summary_messages,
+                    "max_tokens": max_tokens,
+                    "spaces_between_special_tokens": False,
+                    "temperature": temperature,
+                }
                 for attempt in range(max_retries):
                     try:
                         summary_response = requests.post(
                             url=model_url,
                             headers=headers,
-                            json={
-                                "model": model_config.get('model', 'pangu_auto'),
-                                "chat_template": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<s>[unused9]系统：[unused10]' }}{% endif %}{% if message['role'] == 'system' %}{{'<s>[unused9]系统：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'assistant' %}{{'[unused9]助手：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'tool' %}{{'[unused9]工具：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'function' %}{{'[unused9]方法：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'user' %}{{'[unused9]用户：' + message['content'] + '[unused10]'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '[unused9]助手：' }}{% endif %}",
-                                "messages": [
-                                    {"role": "system", "content": system_prompt},
-                                    {"role": "user", "content": user_prompt + " /no_think"},
-                                    {"role": "assistant", "content": ai_response},
-                                    {"role": "user", "content": summary_prompt + " /no_think"}
-                                ],
-                                "max_tokens": max_tokens,
-                                "spaces_between_special_tokens": False,
-                                "temperature": temperature,
-                            },
+                            json=summary_body,
                             timeout=model_config.get("timeout", 180)
                         )
                         summary_response = summary_response.json()
@@ -4455,35 +4464,32 @@ Strictly follow the following format for output:
                     f"TASK FOR RELEVANCE ASSESSMENT: {task_content}"
                 )
 
-                # Get model URL and token from config
+                # Get model URL and token from config（DeepSeek/OpenAI 或 Pangu）
                 config = get_config()
                 model_config = config.get_custom_llm_config()
-
                 model_url = model_config.get('url') or os.getenv('MODEL_REQUEST_URL', '')
-                model_token = model_config.get('token') or os.getenv('MODEL_REQUEST_TOKEN', '')
-                headers = {'Content-Type': 'application/json', 'csb-token': model_token}
-
+                headers = llm_client.get_headers(model_config) if llm_client else {'Content-Type': 'application/json', 'csb-token': model_config.get('token') or os.getenv('MODEL_REQUEST_TOKEN', '')}
+                messages_in = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt + " /no_think"}
+                ]
+                body = llm_client.build_chat_request(model_config, messages_in, temperature=temperature, max_tokens=max_tokens) if llm_client else {
+                    "model": model_config.get('model', 'pangu_auto'),
+                    "chat_template": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<s>[unused9]系统：[unused10]' }}{% endif %}{% if message['role'] == 'system' %}{{'<s>[unused9]系统：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'assistant' %}{{'[unused9]助手：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'tool' %}{{'[unused9]工具：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'function' %}{{'[unused9]方法：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'user' %}{{'[unused9]用户：' + message['content'] + '[unused10]'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '[unused9]助手：' }}{% endif %}",
+                    "messages": messages_in,
+                    "max_tokens": max_tokens,
+                    "spaces_between_special_tokens": False,
+                    "temperature": temperature,
+                }
                 try:
-                    # Add retry logic for AI model call
                     max_retries = 5
                     response = None
-
                     for attempt in range(max_retries):
                         try:
                             response = requests.post(
                                 url=model_url,
                                 headers=headers,
-                                json={
-                                    "model": model_config.get('model', 'pangu_auto'),
-                                    "chat_template": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<s>[unused9]系统：[unused10]' }}{% endif %}{% if message['role'] == 'system' %}{{'<s>[unused9]系统：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'assistant' %}{{'[unused9]助手：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'tool' %}{{'[unused9]工具：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'function' %}{{'[unused9]方法：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'user' %}{{'[unused9]用户：' + message['content'] + '[unused10]'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '[unused9]助手：' }}{% endif %}",
-                                    "messages": [
-                                        {"role": "system", "content": system_prompt},
-                                        {"role": "user", "content": user_prompt + " /no_think"}
-                                    ],
-                                    "max_tokens": max_tokens,
-                                    "spaces_between_special_tokens": False,
-                                    "temperature": temperature,
-                                },
+                                json=body,
                                 timeout=model_config.get("timeout", 180)
                             )
                             response = response.json()

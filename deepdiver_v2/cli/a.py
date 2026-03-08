@@ -362,6 +362,8 @@ def process_single_query(query_data, task_id: Optional[str] = None, username: st
 
         start_time = time.time()
         response = agent.execute_task(enhanced_query + " /no_think")
+
+        print()
         execution_time = time.time() - start_time
 
         # 检查是否被取消

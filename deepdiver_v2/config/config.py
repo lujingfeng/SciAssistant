@@ -24,7 +24,7 @@ class APIConfig:
     # Your own deployed LLM service accessed via requests
     model_request_url: Optional[str] = None
     model_request_token: Optional[str] = None
-    model_name: str = "pangu_auto"  # Default model name
+    model_name: str = "deepseek-chat"  # Default model name (DeepSeek); use pangu_auto for legacy
     
     # Custom Planner Mode
     planner_mode: str = "auto"  # Default planner mode
@@ -72,7 +72,7 @@ class APIConfig:
         # Custom LLM Service
         self.model_request_url = os.getenv('MODEL_REQUEST_URL')
         self.model_request_token = os.getenv('MODEL_REQUEST_TOKEN')
-        self.model_name = os.getenv('MODEL_NAME', 'pangu-auto')
+        self.model_name = os.getenv('MODEL_NAME', 'deepseek-chat')
         
         # Custom Planner Mode
         self.planner_mode = os.getenv("PLANNER_MODE", self.planner_mode)

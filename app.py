@@ -26,10 +26,10 @@ from deepdiver_v2.config.logging_config import quick_setup, get_logger
 # 加载环境变量
 load_dotenv()
 # 数据库配置
-MYSQL_HOST=""
-MYSQL_USER=""
-MYSQL_PASSWORD=""
-MYSQL_DATABASE=""
+MYSQL_HOST="127.0.0.1"
+MYSQL_USER="root"
+MYSQL_PASSWORD="123456"
+MYSQL_DATABASE="sciassistant"
 # 初始化日志系统
 quick_setup(
     environment=os.getenv('APP_ENV', 'production'),
@@ -1661,4 +1661,4 @@ def health_check():
 
 if __name__ == '__main__':
     # 生产环境请修改debug=False，并配置合适的host和port
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=7001)

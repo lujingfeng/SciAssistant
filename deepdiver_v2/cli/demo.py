@@ -34,6 +34,10 @@ from rich.markdown import Markdown
 # Add project root to Python path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+try:
+    from src import llm_client
+except ImportError:
+    llm_client = None
 
 
 # Configure logging to keep the CLI clean
@@ -343,21 +347,16 @@ def classify_query(query: str, config) -> Dict[str, Any]:
     """
     logger = logging.getLogger(__name__)
     
-    # Get model configuration
+    # Get model configuration（DeepSeek/OpenAI 或 Pangu）
     model_config = config.get_custom_llm_config()
     pangu_url = model_config.get('url') or os.getenv('MODEL_REQUEST_URL', '')
-    model_token = model_config.get('token') or os.getenv('MODEL_REQUEST_TOKEN', '')
-    
-    # Validate model configuration
     if not pangu_url:
         logger.error("Model URL not configured for query classification")
-        # Fallback to NORMAL category if model config is missing
         return {
             "category": "NORMAL",
             "reasoning": "模型配置不完整，跳过分类检查，默认按正常任务处理"
         }
-    
-    headers = {'Content-Type': 'application/json', 'csb-token': model_token}
+    headers = llm_client.get_headers(model_config) if llm_client else {'Content-Type': 'application/json', 'csb-token': model_config.get('token') or os.getenv('MODEL_REQUEST_TOKEN', '')}
     
     # Classification prompt (detailed instructions for accurate categorization)
     prompt_template = """
@@ -403,13 +402,21 @@ NORMAL
 
 用户输入query：$query"""
     
-    # Prepare conversation history
     conversation_history = [
         {"role": "user", "content": prompt_template.replace("$query", query) + " /no_think"}
     ]
-    
+    body = llm_client.build_chat_request(
+        model_config, conversation_history,
+        temperature=0.1, max_tokens=5000
+    ) if llm_client else {
+        "model": config.model_name,
+        "chat_template": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<s>[unused9]系统：[unused10]' }}{% endif %}{% if message['role'] == 'system' %}{{'<s>[unused9]系统：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'assistant' %}{{'[unused9]助手：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'tool' %}{{'[unused9]工具：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'function' %}{{'[unused9]方法：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'user' %}{{'[unused9]用户：' + message['content'] + '[unused10]'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '[unused9]助手：' }}{% endif %}",
+        "spaces_between_special_tokens": False,
+        "messages": conversation_history,
+        "temperature": 0.1,
+        "max_tokens": 5000,
+    }
     try:
-        # Call LLM with retry logic
         retry_num = 1
         max_retry_num = 3
         while retry_num <= max_retry_num:
@@ -417,14 +424,7 @@ NORMAL
                 response = requests.post(
                     url=pangu_url,
                     headers=headers,
-                    json={
-                        "model": config.model_name,
-                        "chat_template": "{% for message in messages %}{% if loop.first and messages[0]['role'] != 'system' %}{{ '<s>[unused9]系统：[unused10]' }}{% endif %}{% if message['role'] == 'system' %}{{'<s>[unused9]系统：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'assistant' %}{{'[unused9]助手：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'tool' %}{{'[unused9]工具：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'function' %}{{'[unused9]方法：' + message['content'] + '[unused10]'}}{% endif %}{% if message['role'] == 'user' %}{{'[unused9]用户：' + message['content'] + '[unused10]'}}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '[unused9]助手：' }}{% endif %}",
-                        "spaces_between_special_tokens": False,
-                        "messages": conversation_history,
-                        "temperature": 0.1,  # Low temperature for deterministic classification
-                        "max_tokens": 5000,
-                    },
+                    json=body,
                     timeout=model_config.get("timeout", 60)
                 )
                 

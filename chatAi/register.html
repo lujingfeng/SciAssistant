@@ -219,7 +219,7 @@
 
             try {
                 // 发送注册请求到后端接口
-                const response = await fetch('/5000/api/register', {
+                const response = await fetch('http://localhost:7001/api/register', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
