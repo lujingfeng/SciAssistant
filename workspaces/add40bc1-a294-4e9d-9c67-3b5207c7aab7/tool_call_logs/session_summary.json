@@ -1,0 +1,25 @@
+{
+  "session_id": "add40bc1-a294-4e9d-9c67-3b5207c7aab7",
+  "last_updated": "2026-03-11T10:59:18.940250",
+  "total_tool_calls": 143,
+  "tool_usage_stats": {
+    "file_write": 16,
+    "batch_web_search": 25,
+    "list_workspace": 31,
+    "download_files": 8,
+    "document_extract": 9,
+    "file_read": 26,
+    "str_replace_based_edit_tool": 4,
+    "url_crawler": 20,
+    "file_find_by_name": 2,
+    "load_json": 2
+  },
+  "workspace_path": "/Users/lujingfeng/workspace/SciAssistant/workspaces/add40bc1-a294-4e9d-9c67-3b5207c7aab7",
+  "session_start": "2026-03-11T10:30:39.440050",
+  "agent_activity": {
+    "unknown": {
+      "tool_calls": 143,
+      "last_active": "2026-03-11T10:59:18.938398"
+    }
+  }
+}
