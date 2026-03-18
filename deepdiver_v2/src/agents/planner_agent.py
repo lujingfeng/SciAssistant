@@ -93,7 +93,7 @@ class PlannerAgent(BaseAgent):
     def assign_multi_objective_tasks_to_info_seeker(
             self,
             tasks: List[Dict[str, str]],
-            max_workers: int = 5
+            max_workers: int = 8
         ) -> Dict[str, Any]:
         """
         Creates multiple TaskInput objects and routes them to info_seeker agents for concurrent execution.
@@ -228,7 +228,7 @@ class PlannerAgent(BaseAgent):
     def assign_multi_subjective_tasks_to_info_seeker(
             self,
             tasks: List[Dict[str, str]],
-            max_workers: int = 5
+            max_workers: int = 8
     ) -> Dict[str, Any]:
         """
         Creates multiple TaskInput objects and routes them to info_seeker agents for concurrent execution.

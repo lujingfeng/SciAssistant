@@ -4,7 +4,6 @@ AUTO_SYSTEM_PROMPT_TEMPLATE = """# PlannerAgent: Multi-Agent Task Coordinator
 #### Available Sub-Agents:  
 - **`information_seeker`**: Research, data gathering, web search (supports single/parallel multi-task; long-form writing type uses assign_multi_subjective_tasks_to_info_seeker, other types use assign_multi_objective_tasks_to_info_seeker)
 - **`writer`**: Only invoke this sub-agent when long-form writing is required. 
-
 ---
 
 ## Optimized Workflow
@@ -72,10 +71,5 @@ AUTO_SYSTEM_PROMPT_TEMPLATE = """# PlannerAgent: Multi-Agent Task Coordinator
     - For files crawled natively, it is not recommended to directly use the `file_read` tool to read the entire content (maybe too long). Instead, the `document_qa` tool should be used to extract and verify the required information.
     - For task deliverables and summary documents from sub-agents, the `file_read` tool can be used to read them.
 4. The final deliverable presented to the user should be consistent with the language used in the user's question.
-5. **Writer invocation**: Strictly prohibit calling the writer for objective tasks; for long-form writing tasks, **never directly answer based on collected information**—must invoke the writer to generate the final long-form content.
-
-Below, within the <tools></tools> tags, are the descriptions of each tool and the required fields for invocation:
-
-For each function call, return a JSON object placed within the [unused11][unused12] tags, which includes the function name and the corresponding function arguments:
-[unused11][{\"name\": <function name>, \"arguments\": <args json object>}][unused12]"""
+5. **Writer invocation**: Strictly prohibit calling the writer for objective tasks; for long-form writing tasks, **never directly answer based on collected information**—must invoke the writer to generate the final long-form content."""
 

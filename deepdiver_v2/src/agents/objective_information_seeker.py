@@ -123,13 +123,6 @@ class InformationSeekerAgent(BaseAgent):
             - `reflect` is a systematic tool. When encountering a failure in tool execution, it is necessary to invoke the reflect tool to conduct a review and revise the task plan. It does not acquire new information; it only saves your thoughts into memory.
         
         Always provide clear reasoning for your actions and synthesize information effectively.
-
-Below, within the <tools></tools> tags, are the descriptions of each tool and the required fields for invocation:
-<tools>
-$tool_schemas
-</tools>
-For each function call, return a JSON object placed within the [unused11][unused12] tags, which includes the function name and the corresponding function arguments:
-[unused11][{\"name\": <function name>, \"arguments\": <args json object>}][unused12]
 """
         return system_prompt_template.replace("$tool_schemas", tool_schemas_str)
 

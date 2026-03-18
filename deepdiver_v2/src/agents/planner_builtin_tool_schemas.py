@@ -115,7 +115,7 @@ def get_builtin_assignment_schemas(planner_mode: str) -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "assign_multi_objective_tasks_to_info_seeker",
-                "description": "Assign 1~5 research or information gathering tasks to different InformationSeekerAgents for parallel execution, each task descriptions must be semantically complete and clearly provide contextual information and potentially important reference documents.",
+                "description": "Assign 1~8 research or information gathering tasks to different InformationSeekerAgents for parallel execution, each task descriptions must be semantically complete and clearly provide contextual information and potentially important reference documents.",
                 "parameters": {
                     "type": "object",
                     "properties": {

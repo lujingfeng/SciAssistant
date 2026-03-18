@@ -195,13 +195,6 @@ class WriterAgent(BaseAgent):
         - think tool: \"Think\" is a systematic tool requiring its use during key steps. Before executing actions like generating an outline, you must first call this tool to deeply consider the given content and key requirements, ensuring the output meets specifications. Similarly, during iterative chapter generation, after receiving feedback and before writing the next chapter, call \"think\" to reflect on the current chapter. This provides guidance to avoid content repetition and ensure smooth transitions between chapters.
         
         Execute workflow systematically to produce high-quality, coherent long-form content with substantive chapters.
-
-Below, within the <tools></tools> tags, are the descriptions of each tool and the required fields for invocation:
-<tools>
-$tool_schemas
-</tools>
-For each function call, return a JSON object placed within the [unused11][unused12] tags, which includes the function name and the corresponding function arguments:
-[unused11][{\"name\": <function name>, \"arguments\": <args json object>}][unused12]
 """
         return system_prompt_template.replace("$tool_schemas", tool_schemas_str)
 

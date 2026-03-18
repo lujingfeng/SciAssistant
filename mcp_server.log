@@ -1,0 +1,48 @@
+2026-03-14 19:52:53,880 - src.tools.server_config - ERROR - from_yaml:91 - Failed to load configuration from ./src/tools/server_config.yaml: [Errno 2] No such file or directory: './src/tools/server_config.yaml'
+2026-03-14 19:52:53,880 - src.tools.server_config - INFO - from_yaml:92 - Using default configuration
+2026-03-14 19:52:53,881 - __main__ - INFO - print_startup_info:152 - 🚀 DeepDiver Demo MCP Server
+2026-03-14 19:52:53,881 - __main__ - INFO - print_startup_info:153 - ==================================================
+2026-03-14 19:52:53,881 - __main__ - INFO - print_startup_info:154 - 📊 Features:
+2026-03-14 19:52:53,881 - __main__ - INFO - print_startup_info:155 -   • Session Management: ✅ (TTL: 3600s)
+2026-03-14 19:52:53,881 - __main__ - INFO - print_startup_info:156 -   • Workspace Isolation: ✅ (Base: workspaces)
+2026-03-14 19:52:53,881 - __main__ - INFO - print_startup_info:157 -   • Tool Call Tracking: ✅
+2026-03-14 19:52:53,881 - __main__ - INFO - print_startup_info:158 -   • Client Rate Limiting: ✅ (300/min)
+2026-03-14 19:52:53,881 - __main__ - INFO - print_startup_info:159 -   • Global Tool Rate Limiting: ❌
+2026-03-14 19:52:53,881 - __main__ - INFO - print_startup_info:160 -   • Security Middleware: ✅
+2026-03-14 19:52:53,881 - __main__ - INFO - print_startup_info:176 - 🔧 Tools Available: 34
+2026-03-14 19:52:53,882 - __main__ - INFO - print_startup_info:177 -   • All tools defined in schemas: 34 tools
+2026-03-14 19:52:53,882 - __main__ - INFO - print_startup_info:178 -   • Sample tools: arxiv_read_paper, arxiv_search, bash, batch_web_search, concat_section_files...
+2026-03-14 19:52:53,882 - __main__ - INFO - print_startup_info:179 - ==================================================
+2026-03-14 19:52:53,882 - src.tools.server_session - INFO - _start_cleanup_thread:328 - Started session cleanup thread
+2026-03-14 19:52:53,882 - __main__ - INFO - create_app:86 - No tool rate limits configured - tools will run without global rate limiting
+2026-03-14 19:52:53,883 - __main__ - INFO - main:216 - 🌐 Starting server at http://127.0.0.1:6274
+2026-03-14 19:52:53,883 - __main__ - INFO - main:217 - 📡 MCP endpoint: http://127.0.0.1:6274/mcp
+2026-03-14 19:52:53,883 - __main__ - INFO - main:218 - 🏥 Health check: http://127.0.0.1:6274/health
+2026-03-14 19:52:53,883 - __main__ - INFO - main:219 - 📊 Tracking info: http://127.0.0.1:6274/tracking?session_id=<id>
+2026-03-14 19:52:53,883 - __main__ - INFO - main:220 - 🚦 Rate limit stats: http://127.0.0.1:6274/rate-limits
+2026-03-14 20:36:58,528 - __main__ - INFO - print_startup_info:152 - 🚀 DeepDiver Demo MCP Server
+2026-03-14 20:36:58,528 - __main__ - INFO - print_startup_info:153 - ==================================================
+2026-03-14 20:36:58,528 - __main__ - INFO - print_startup_info:154 - 📊 Features:
+2026-03-14 20:36:58,528 - __main__ - INFO - print_startup_info:155 -   • Session Management: ✅ (TTL: 21600s)
+2026-03-14 20:36:58,529 - __main__ - INFO - print_startup_info:156 -   • Workspace Isolation: ✅ (Base: workspaces)
+2026-03-14 20:36:58,529 - __main__ - INFO - print_startup_info:157 -   • Tool Call Tracking: ✅
+2026-03-14 20:36:58,529 - __main__ - INFO - print_startup_info:158 -   • Client Rate Limiting: ✅ (300000/min)
+2026-03-14 20:36:58,529 - __main__ - INFO - print_startup_info:159 -   • Global Tool Rate Limiting: ✅
+2026-03-14 20:36:58,529 - __main__ - INFO - print_startup_info:160 -   • Security Middleware: ✅
+2026-03-14 20:36:58,529 - __main__ - INFO - print_startup_info:164 - 🚦 Tool Rate Limits: 4 tools configured
+2026-03-14 20:36:58,529 - __main__ - INFO - print_startup_info:168 -   • batch_web_search: 9000/min, burst: 35
+2026-03-14 20:36:58,529 - __main__ - INFO - print_startup_info:168 -   • url_crawler: 9000/min, burst: 60
+2026-03-14 20:36:58,529 - __main__ - INFO - print_startup_info:168 -   • document_qa: 15000/min, burst: 150
+2026-03-14 20:36:58,529 - __main__ - INFO - print_startup_info:170 -   • ... and 1 more tools
+2026-03-14 20:36:58,529 - __main__ - INFO - print_startup_info:176 - 🔧 Tools Available: 34
+2026-03-14 20:36:58,529 - __main__ - INFO - print_startup_info:177 -   • All tools defined in schemas: 34 tools
+2026-03-14 20:36:58,530 - __main__ - INFO - print_startup_info:178 -   • Sample tools: arxiv_read_paper, arxiv_search, bash, batch_web_search, concat_section_files...
+2026-03-14 20:36:58,530 - __main__ - INFO - print_startup_info:179 - ==================================================
+2026-03-14 20:36:58,530 - src.tools.server_session - INFO - _start_cleanup_thread:328 - Started session cleanup thread
+2026-03-14 20:36:58,530 - src.tools.server_rate_limit - INFO - __init__:44 - Initialized global tool rate limiter for 4 tools
+2026-03-14 20:36:58,530 - __main__ - INFO - create_app:84 - Initialized global tool rate limiter with 4 tool limits
+2026-03-14 20:36:58,531 - __main__ - INFO - main:218 - 🌐 Starting server at http://127.0.0.1:6274
+2026-03-14 20:36:58,531 - __main__ - INFO - main:219 - 📡 MCP endpoint: http://127.0.0.1:6274/mcp
+2026-03-14 20:36:58,531 - __main__ - INFO - main:220 - 🏥 Health check: http://127.0.0.1:6274/health
+2026-03-14 20:36:58,531 - __main__ - INFO - main:221 - 📊 Tracking info: http://127.0.0.1:6274/tracking?session_id=<id>
+2026-03-14 20:36:58,531 - __main__ - INFO - main:222 - 🚦 Rate limit stats: http://127.0.0.1:6274/rate-limits
