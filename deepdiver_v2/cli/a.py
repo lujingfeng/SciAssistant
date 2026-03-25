@@ -342,7 +342,7 @@ def process_single_query(query_data, task_id: Optional[str] = None, username: st
             model=app_config.model_name,
             max_iterations=app_config.planner_max_iterations or 40,
             sub_agent_configs=sub_agent_configs,
-            task_id=task_id
+            task_id=task_id,
         )
         # 设置取消令牌
         cancellation_token = task_manager.get_cancellation_token(task_id)

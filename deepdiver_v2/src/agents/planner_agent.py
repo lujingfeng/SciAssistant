@@ -24,11 +24,12 @@ from .base_agent import BaseAgent, AgentConfig, AgentResponse, WriterAgentTaskIn
 # Import agent creators for built-in task assignment
 from .writer_agent import create_writer_agent
 from .. import llm_client
-from .planner_builtin_tool_schemas import get_builtin_assignment_schemas
-from .planner_auto_prompt  import AUTO_SYSTEM_PROMPT_TEMPLATE
-from .planner_writing_prompt  import WRITING_SYSTEM_PROMPT_TEMPLATE
-from .planner_qa_prompt  import QA_SYSTEM_PROMPT_TEMPLATE
-
+from .builtin_tool_schemas.planner_builtin_tool_schemas import get_builtin_assignment_schemas
+from .prompt.planner_auto_prompt  import AUTO_SYSTEM_PROMPT_TEMPLATE
+from .prompt.planner_writing_prompt  import WRITING_SYSTEM_PROMPT_TEMPLATE
+from .prompt.planner_qa_prompt  import QA_SYSTEM_PROMPT_TEMPLATE
+from .prompt.planner_sci_review_prompt import SCI_REVIEW_INTRO_SYSTEM_PROMPT_TEMPLATE
+from .prompt.planner_writing_prompt_zh import WRITING_SYSTEM_PROMPT_TEMPLATE_ZH
 
 class PlannerAgent(BaseAgent):
     """
@@ -82,7 +83,7 @@ class PlannerAgent(BaseAgent):
 
         planner_mode_system_prompt_map = {
             "auto": auto_system_prompt_template,
-            "writing": writing_system_prompt_template,
+            "writing": WRITING_SYSTEM_PROMPT_TEMPLATE_ZH,
             "qa": qa_system_prompt_template
         }
 
@@ -481,6 +482,7 @@ class PlannerAgent(BaseAgent):
 
             # Build system prompt for planning
             system_prompt = self._build_system_prompt()
+            self.logger.info(f"System prompt: {system_prompt}")
             # Add to conversation
             conversation_history.append({"role": "system", "content": system_prompt})
             conversation_history.append({"role": "user", "content": initial_message + " /no_think"})
