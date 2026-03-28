@@ -1,0 +1,44 @@
+{
+  "name": "sciassistant-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "main/index.js",
+  "scripts": {
+    "dev": "concurrently -k \"npm run dev:renderer\" \"npm run dev:electron\"",
+    "dev:renderer": "vite --config renderer/vite.config.ts",
+    "dev:electron": "wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
+    "build:renderer": "vite build --config renderer/vite.config.ts",
+    "start": "electron .",
+    "pack": "npm run build:renderer && electron-builder --dir"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "build": {
+    "appId": "com.scsio.sciassistant",
+    "productName": "SciAssistant",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main/**/*",
+      "preload/**/*",
+      "renderer/dist/**/*",
+      "package.json"
+    ]
+  }
+}
